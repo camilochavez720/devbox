@@ -1,0 +1,11 @@
+http:
+  host: "127.0.0.1"
+  port: 8080
+
+auth:
+  token: "CAMBIAR_ESTE_TOKEN_MAS_ADELANTE"
+
+services:
+  - "ssh"
+  - "NetworkManager"
+  - "systemd-resolved"

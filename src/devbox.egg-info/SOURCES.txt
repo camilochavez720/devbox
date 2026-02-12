@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-src/devbox/__init__.py
-src/devbox/main.py
-src/devbox.egg-info/PKG-INFO
-src/devbox.egg-info/SOURCES.txt
-src/devbox.egg-info/dependency_links.txt
-src/devbox.egg-info/requires.txt
-src/devbox.egg-info/top_level.txt

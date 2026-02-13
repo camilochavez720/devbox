@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from devbox.collectors.system import get_system_snapshot
 from devbox.config import load_config
 from devbox.services.systemd import get_services_status
@@ -36,7 +36,6 @@ def services():
     }
 
 @app.post("/actions/restart")
-def restart():
-    require_token()
+def restart(_: None = Depends(require_token)):
     schedule_restart(delay_s=0.3)
     return {"status": "restarting"}

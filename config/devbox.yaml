@@ -1,9 +1,9 @@
 http:
   host: "127.0.0.1"
-  port: 8080
+  port: 8081
 
 auth:
-  token: "CAMBIAR_ESTE_TOKEN_MAS_ADELANTE"
+  token: "dev-local-token"
 
 services:
   - "ssh"

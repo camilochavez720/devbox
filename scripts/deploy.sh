@@ -138,7 +138,7 @@ if [[ "$READY" -ne 1 ]]; then
   exit 1
 fi
 
-INFO_JSON="$(curl -fsS --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/info)"
+INFO_JSON="$(curl -fsS --retry 20 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/info 2>/dev/null)"
 echo "$INFO_JSON" | python3 -m json.tool >/dev/null
 log "$INFO_JSON"
 COMMIT_PROD="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("git_commit",""))' "$INFO_JSON")"

@@ -15,14 +15,18 @@ COMMIT="$(git rev-parse --short=12 HEAD)"
 echo "Commit: $COMMIT"
 
 echo "[3/6] Syncing repo -> $OPT_DIR ..."
+sudo mkdir -p "$OPT_DIR"
 sudo rsync -a --delete \
   --exclude '.git' \
   --exclude '.venv' \
-  "$REPO_DIR"/ "$OPT_DIR"/
+  --exclude '__pycache__' \
+  --exclude '.pytest_cache' \
+  "$REPO_DIR/" "$OPT_DIR/"
 
-echo "[4/6] Setting ownership + installing editable..."
-sudo chown -R devbox:devbox "$OPT_DIR"
-sudo -u devbox "$OPT_DIR/.venv/bin/pip" install -e "$OPT_DIR"
+echo "[4/6] Creating/refreshing venv + installing editable..."
+sudo python3 -m venv "$OPT_DIR/.venv"
+sudo "$OPT_DIR/.venv/bin/python" -m pip install --upgrade pip
+sudo "$OPT_DIR/.venv/bin/python" -m pip install -e "$OPT_DIR[dev]"
 
 echo "[5/6] Updating systemd env DEVBOX_GIT_COMMIT..."
 if ! sudo test -f "$UNIT_FILE"; then
@@ -30,9 +34,8 @@ if ! sudo test -f "$UNIT_FILE"; then
   exit 1
 fi
 
-# Replace if exists, otherwise add under the existing DEVBOX_CONFIG line (or under [Service])
 if sudo grep -q '^Environment=DEVBOX_GIT_COMMIT=' "$UNIT_FILE"; then
-  sudo sed -i "s/^Environment=DEVBOX_GIT_COMMIT=.*/Environment=DEVBOX_GIT_COMMIT=${COMMIT}/" "$UNIT_FILE"
+  sudo sed -i -E "s/^Environment=DEVBOX_GIT_COMMIT=.*/Environment=DEVBOX_GIT_COMMIT=${COMMIT}/" "$UNIT_FILE"
 else
   if sudo grep -q '^Environment=DEVBOX_CONFIG=' "$UNIT_FILE"; then
     sudo sed -i "/^Environment=DEVBOX_CONFIG=/a Environment=DEVBOX_GIT_COMMIT=${COMMIT}" "$UNIT_FILE"
@@ -46,12 +49,13 @@ sudo systemctl restart devbox
 
 echo "[6/6] Verifying /info..."
 sleep 1
-curl -s http://127.0.0.1:8080/info
+INFO_JSON="$(curl -s http://127.0.0.1:8080/info)"
+echo "$INFO_JSON" | python3 -m json.tool >/dev/null
+echo "$INFO_JSON"
 
-INFO_COMMIT="$(curl -s http://127.0.0.1:8080/info | python3 -c "import sys,json; print(json.load(sys.stdin).get('git_commit',''))")"
-if [ "$INFO_COMMIT" != "$COMMIT" ]; then
+INFO_COMMIT="$(echo "$INFO_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("git_commit",""))')"
+if [[ "$INFO_COMMIT" != "$COMMIT" ]]; then
   echo "WARNING: /info git_commit ($INFO_COMMIT) != repo commit ($COMMIT)" >&2
 fi
 
-echo
 echo "DONE"

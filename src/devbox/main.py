@@ -6,12 +6,12 @@ from devbox.auth import require_token
 from devbox.actions.restart import schedule_restart
 from devbox.collectors.info import get_info
 
-app = FastAPI(title="devbox", version="0.1.0")
+app = FastAPI(title="devbox")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "devbox", "version": "0.1.0"}
+    return {"status": "ok", "service": "devbox"}
 
 
 @app.get("/system")
@@ -43,4 +43,4 @@ def restart(_: None = Depends(require_token)):
 
 @app.get("/info")
 def info():
-    return get_info(service="devbox", version="0.1.0")
+    return get_info(service="devbox")

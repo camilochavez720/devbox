@@ -1,358 +1,427 @@
-DEVBOX (Python) — Documento de diseño y plan de implementación (Ubuntu 24.04)
-0) Objetivo
+# DEVBOX (Python) — Documento de diseño y estado actual (Ubuntu 24.04)
 
-Construir un daemon local (“devbox”) que corre en Ubuntu como servicio systemd y expone un API HTTP en localhost para:
+## 0) Objetivo
 
-inspeccionar estado del sistema (CPU/RAM/Disk/Uptime)
+Construir un daemon local (“devbox”) que corre en Ubuntu como servicio systemd y expone un API HTTP **solo en localhost (127.0.0.1)** para:
 
-inspeccionar estado de servicios (systemd)
+- inspeccionar estado del sistema (CPU/RAM/Disk/Uptime)
+- inspeccionar estado de servicios (systemd)
+- ejecutar acciones controladas (reinicio del propio servicio)
+- dejar trazabilidad en logs (journald) y tener tests básicos
 
-ejecutar acciones controladas (ej. restart del propio servicio)
+Propósito principal: aprender desarrollo “real” en Linux: CLI, permisos, systemd, logs, estructura de proyecto, empaquetado/instalación y prácticas operativas.
 
-dejar trazabilidad en logs (journald) y tener tests básicos
+---
 
-El propósito principal es aprender desarrollo en Linux: CLI, permisos, systemd, logs, estructura de proyecto, empaquetado/instalación, y buenas prácticas operativas.
+## 1) Estado actual (lo que YA existe y funciona)
 
-1) Alcance (lo que SÍ haremos)
-1.1 Funcionalidades mínimas (MVP)
+### 1.1 Endpoints implementados (MVP actual)
 
-API (FastAPI)
+- `GET /health`
+  - Respuesta actual:
+    - `{"status":"ok","service":"devbox"}`
 
-GET /health → estado simple
+- `GET /system`
+  - Snapshot del sistema (usando `psutil`):
+    - `cpu_percent`
+    - `mem` (estructura de memoria)
+    - `disk` (estructura de disco)
+    - `uptime_seconds` (uptime del sistema)
 
-GET /system → cpu, mem, disk, uptime
+- `GET /services`
+  - Lee lista `services` desde config y consulta `systemctl is-active <service>`.
+  - Respuesta actual incluye `config_path` y lista con:
+    - `name`, `state`, `active`, `error`
 
-GET /services → estado de una lista de servicios (docker, ssh, etc.)
+- `POST /actions/restart`
+  - Protegido por token `X-Devbox-Token` (header).
+  - Dispara un reinicio controlado: la request responde, luego el proceso programa su salida y systemd lo levanta de nuevo.
 
-POST /actions/restart → reinicia devbox de forma segura (sin root)
+- `GET /info`
+  - Metadata operativa:
+    - `service`, `version`, `pid`, `config_path`, `python`, `uptime_seconds`, `git_commit`
+  - `git_commit` en prod viene de `DEVBOX_GIT_COMMIT` (variable en unit file) para no depender de `.git`.
 
-Operación
+### 1.2 Modos de ejecución
 
-correr como usuario no privilegiado devbox
+- **DEV (manual, puerto 8081)**
+  - Corre desde el repo `~/devbox` con tu venv local.
+  - Usa config del repo (`config/devbox.yaml`) vía `DEVBOX_CONFIG`.
+  - Objetivo: iterar rápido.
 
-configurar por archivo en /etc/devbox/config.yaml
+- **PROD (systemd, puerto 8080)**
+  - Corre como `User=devbox` / `Group=devbox`.
+  - Código en `/opt/devbox`.
+  - Config en `/etc/devbox/config.yaml`.
+  - Logs en journald (`journalctl -u devbox`).
+  - Deploy automatizado con `make deploy` (usa `scripts/deploy.sh`).
 
-logs a journald (ver journalctl -u devbox)
+### 1.3 Seguridad operativa aplicada (lo que se cumple)
 
-servicio systemd con restart automático
+- Bind solo a `127.0.0.1` (no expuesto a LAN/Internet).
+- Acciones protegidas por token local (header `X-Devbox-Token`) leído desde config.
+- Servicio corre sin privilegios (usuario `devbox`).
+- Unit file con hardening básico:
+  - `NoNewPrivileges=true`
+  - `PrivateTmp=true`
+- En prod se evita instalar dependencias de desarrollo (`pytest`, `httpx`, etc.).
 
-Seguridad básica
+---
 
-bind solo a 127.0.0.1
+## 2) Alcance
 
-token estático local para endpoints de acciones (header)
+### 2.1 Lo que SÍ hacemos (MVP)
 
-Calidad
+- API local FastAPI en localhost.
+- Métricas del sistema con `psutil`.
+- Estado de servicios con systemd.
+- Acción controlada: reinicio del propio servicio.
+- Configuración por YAML.
+- Logs via journald (systemd).
+- Tests básicos con pytest (solo en DEV).
+- Workflow reproducible de deploy.
 
-tests unitarios para recolectores (pytest)
+### 2.2 Extensiones posibles (post-MVP)
 
-lint/format mínimo (black + ruff)
+- `/metrics` estilo Prometheus.
+- Cache con TTL para collectors.
+- `install.sh` y `uninstall.sh` idempotentes.
+- Healthchecks más ricos (sanity check de config, etc.).
+- Rotación/control de token o reload de config (siempre sin sobrecomplicar).
 
-1.2 Extensiones (después del MVP)
+---
 
-endpoint /metrics estilo Prometheus (opcional)
+## 3) No objetivos
 
-caché de métricas con TTL
+- No exponer el servicio a la red LAN/Internet (sin TLS, sin auth robusta, sin hardening avanzado).
+- No ejecutar comandos arbitrarios del sistema.
+- No administrar servicios de terceros como root desde el API (no reiniciar docker, etc.).
+- No GUI.
 
-endpoint /actions/run-tests (solo si está bien encerrado)
+---
 
-instalador script install.sh (idempotente) y uninstall.sh
+## 4) Decisiones técnicas (alineadas a lo implementado)
 
-2) No objetivos (para evitar que se descontrole)
+### 4.1 Stack
 
-No exponer el servicio a la red LAN/Internet (no TLS, no auth robusta)
+- Python 3.12 (Ubuntu 24.04)
+- FastAPI + Uvicorn
+- psutil (métricas)
+- PyYAML (config)
+- pytest (tests, DEV)
+- ruff + black (calidad, DEV)
+- systemd + journald (operación)
 
-No ejecutar comandos arbitrarios del sistema
+### 4.2 Principio de seguridad clave
 
-No administrar servicios como root (nada de systemctl restart docker desde el API)
+- “Acciones” = whitelist, sin privilegios.
+- El servicio no usa sudo.
+- El reinicio se hace dejando que systemd lo gestione (Restart=always).
 
-No GUI (por ahora)
+---
 
-3) Decisiones técnicas
-3.1 Stack
+## 5) Configuración y operación real
 
-Python 3.12 (Ubuntu 24.04)
+### 5.1 Config real (prod)
 
-FastAPI + Uvicorn
+Archivo: `/etc/devbox/config.yaml`  
+Recomendación de permisos:
+- owner: `root:devbox`
+- modo: `0640`
 
-psutil para métricas del sistema
+Ejemplo (forma y claves reales):
 
-PyYAML para config YAML
-
-pytest para tests
-
-ruff + black (calidad)
-
-logging: logging estándar (formato consistente, ideal JSON si quieres)
-
-3.2 Principio de seguridad clave
-
-Las “acciones” deben ser whitelist y sin privilegios.
-
-Para “restart” del propio servicio: el proceso sale y systemd lo levanta de nuevo (Restart=on-failure o always).
-
-Nada de sudo dentro del servicio.
-
-Token local en header para acciones.
-
-4) Arquitectura (simple y mantenible)
-4.1 Componentes
-
-API layer: FastAPI routes
-
-Collectors: módulos que recolectan métricas (psutil)
-
-Service checker: consulta systemctl is-active <service>
-
-Actions: operaciones controladas (restart = exit controlado)
-
-4.2 Flujo “restart”
-
-POST /actions/restart valida token
-
-responde 202 (Accepted)
-
-dispara un shutdown en background (graceful)
-
-proceso termina con exit code no-cero (o normal, según Restart=) y systemd reinicia
-
-5) Especificación de API (MVP)
-5.1 Auth (solo acciones)
-
-Header requerido en acciones:
-
-X-Devbox-Token: <token>
-
-Token se define en /etc/devbox/config.yaml.
-
-5.2 Endpoints
-
-GET /health
-
-200: {"status":"ok","service":"devbox","version":"0.1.0"}
-
-GET /system
-
-200 ejemplo:
-
-{
-  "cpu_percent": 12.4,
-  "mem": {"total": 16777216, "used": 8237056, "percent": 49.1},
-  "disk": {"path": "/", "total": 512000000000, "used": 210000000000, "percent": 41.0},
-  "uptime_seconds": 123456
-}
-
-
-GET /services
-
-Config define qué servicios mirar.
-
-200 ejemplo:
-
-{
-  "services": [
-    {"name":"docker", "active": true, "state":"active"},
-    {"name":"ssh", "active": true, "state":"active"}
-  ]
-}
-
-
-POST /actions/restart
-
-Requiere token
-
-202: {"status":"restarting"}
-
-6) Configuración
-6.1 Ubicación y permisos
-
-Archivo: /etc/devbox/config.yaml
-
-Owner: root:devbox
-
-Permisos: 0640 (devbox puede leer, otros no)
-
-6.2 Contenido (MVP)
+```yaml
 http:
   host: "127.0.0.1"
   port: 8080
 
 auth:
-  token: "CAMBIAR_ESTE_TOKEN"
+  token: "<TOKEN_HEX_LARGO>"
 
 services:
-  - "docker"
   - "ssh"
+  - "NetworkManager"
+  - "systemd-resolved"
+```
 
-7) Estructura del repo
-devbox/
-  DEVBOX.md
-  README.md
-  pyproject.toml
-  src/
-    devbox/
-      __init__.py
-      main.py            # crea app FastAPI
-      config.py          # carga config YAML
-      collectors/
-        system.py        # cpu/mem/disk/uptime
-      services/
-        systemd.py       # check systemctl
-      actions/
-        restart.py       # shutdown/exit controlado
-      api/
-        routes.py        # define endpoints
-  tests/
-    test_system_collector.py
-    test_services.py
-  packaging/
-    devbox.service       # unit file template
-  scripts/
-    install.sh
-    uninstall.sh
+Regla operativa:
+- El servicio en prod usa ese archivo por env:
+  - `DEVBOX_CONFIG=/etc/devbox/config.yaml`
 
-8) Systemd (operación real en Ubuntu)
-8.1 Usuario del servicio
+### 5.2 Unit file real (prod)
 
-Usuario dedicado: devbox
+Archivo: `/etc/systemd/system/devbox.service`
 
-sin login interactivo
+Puntos clave:
+- corre como `User=devbox` / `Group=devbox`
+- `WorkingDirectory=/opt/devbox`
+- variables:
+  - `DEVBOX_CONFIG=/etc/devbox/config.yaml`
+  - `DEVBOX_GIT_COMMIT=<12-chars>` (actualizado por deploy)
+- start:
+  - `ExecStart=/opt/devbox/.venv/bin/uvicorn devbox.main:app --host 127.0.0.1 --port 8080`
+- restart:
+  - `Restart=always`
+  - `RestartSec=2`
+- hardening:
+  - `NoNewPrivileges=true`
+  - `PrivateTmp=true`
 
-8.2 Directorios runtime
+Ejemplo representativo:
 
-código: /opt/devbox (o /srv/devbox)
+```ini
+[Unit]
+Description=Devbox local API
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
-estado: /var/lib/devbox (si se necesita)
-
-config: /etc/devbox/config.yaml
-
-logs: journald (no archivos por defecto)
-
-8.3 Unit file (MVP)
-
-Archivo: /etc/systemd/system/devbox.service
-
-Requisitos:
-
+[Service]
+Type=simple
 User=devbox
-
+Group=devbox
 WorkingDirectory=/opt/devbox
 
+Environment=DEVBOX_CONFIG=/etc/devbox/config.yaml
+Environment=DEVBOX_GIT_COMMIT=<12-chars>
 ExecStart=/opt/devbox/.venv/bin/uvicorn devbox.main:app --host 127.0.0.1 --port 8080
 
-Restart=on-failure
-
+Restart=always
 RestartSec=2
 
-hardening mínimo:
-
 NoNewPrivileges=true
-
 PrivateTmp=true
 
-ProtectSystem=strict (puede requerir excepciones si lees algo del FS; se ajusta luego)
+[Install]
+WantedBy=multi-user.target
+```
 
-ReadWritePaths=/var/lib/devbox
+---
 
-Nota importante: hardening estricto puede romper cosas si el proceso necesita leer rutas fuera de lo permitido. Se activa gradualmente.
+## 6) Arquitectura del código (lo implementado)
 
-8.4 Comandos operativos
+Estructura (real/actual):
 
-Ver estado: systemctl status devbox
+- `src/devbox/main.py`
+  - FastAPI app + rutas: `/health`, `/system`, `/services`, `/actions/restart`, `/info`
 
-Logs: journalctl -u devbox -f
+- `src/devbox/config.py`
+  - resuelve config path (prioridad):
+    1) `DEVBOX_CONFIG` si existe
+    2) `/etc/devbox/config.yaml`
+    3) `./config/devbox.yaml` relativo (DEV)
+  - parsea YAML y normaliza:
+    - `http_host`, `http_port`
+    - `auth_token`
+    - lista `services`
+  - expone `load_config()`
 
-Reinicio manual: sudo systemctl restart devbox
+- `src/devbox/auth.py`
+  - dependencia `require_token(...)`
+  - fail-closed:
+    - si token no está configurado en config => 500
+    - si header no coincide => 401
 
-9) Desarrollo local
-9.1 Entorno virtual
+- `src/devbox/collectors/system.py`
+  - snapshot: cpu/mem/disk/uptime
 
-.venv dentro del repo (simple y explícito)
+- `src/devbox/services/systemd.py`
+  - consulta `systemctl is-active <service>` y devuelve estado (y error si aplica)
 
-dependencias en pyproject.toml
+- `src/devbox/actions/restart.py`
+  - programa el restart con delay pequeño para no cortar la respuesta HTTP
+  - systemd reinicia el proceso (por Restart=always)
 
-9.2 Ejecutar en dev
+- `src/devbox/collectors/info.py`
+  - uptime del proceso (no del sistema)
+  - `config_path` desde `load_config()`
+  - `git_commit`:
+    - si existe `DEVBOX_GIT_COMMIT` => usarlo (prod)
+    - si no, intenta leer `.git/HEAD` (dev)
+    - si falla => `"unknown"`
 
-uvicorn devbox.main:app --reload --host 127.0.0.1 --port 8080
+---
 
-9.3 Calidad
+## 7) Workflow operativo (cómo trabajar)
 
-ruff check .
+### 7.1 Comandos para editar y ver archivos
 
-black .
+Editar este documento:
+```bash
+nano ~/devbox/DEVBOX.md
+```
 
-pytest -q
+Ver el documento (sin editor):
+```bash
+sed -n '1,260p' ~/devbox/DEVBOX.md
+```
 
-10) Riesgos y controles
-10.1 Riesgo: ejecutar comandos del sistema
+Editar script de deploy:
+```bash
+nano ~/devbox/scripts/deploy.sh
+```
 
-Control: acciones whitelist y sin shell. Si se usa subprocess:
+Editar unit file:
+```bash
+sudo nano /etc/systemd/system/devbox.service
+sudo systemctl daemon-reload
+sudo systemctl restart devbox
+```
 
-lista fija de comandos
+Editar config:
+```bash
+sudo nano /etc/devbox/config.yaml
+sudo systemctl restart devbox
+```
 
-argumentos validados
+Ver unit file y config:
+```bash
+sudo sed -n '1,220p' /etc/systemd/system/devbox.service
+sudo sed -n '1,160p' /etc/devbox/config.yaml
+```
 
-shell=False
+### 7.2 DEV mode (8081)
 
-timeout corto
+Opción A (si tu Makefile tiene target `dev`):
+```bash
+cd ~/devbox
+make dev
+```
 
-output limitado
+Opción B (manual):
+```bash
+cd ~/devbox
+source .venv/bin/activate
+export DEVBOX_CONFIG=config/devbox.yaml
+uvicorn devbox.main:app --reload --host 127.0.0.1 --port 8081
+```
 
-10.2 Riesgo: elevar privilegios
+Verificación DEV:
+```bash
+curl -s http://127.0.0.1:8081/health && echo
+curl -s http://127.0.0.1:8081/info && echo
+curl -s http://127.0.0.1:8081/services && echo
+```
 
-Control: no sudo dentro del servicio. Si alguna acción requiere root, se mueve fuera del MVP y se diseña con polkit o un helper separado (no ahora).
+### 7.3 PROD mode (8080/systemd)
 
-10.3 Riesgo: exponer red
+Verificación PROD:
+```bash
+sudo systemctl status devbox --no-pager | sed -n '1,18p'
+sudo ss -ltnp | grep ':8080' || true
+curl -s http://127.0.0.1:8080/health && echo
+curl -s http://127.0.0.1:8080/info && echo
+curl -s http://127.0.0.1:8080/services && echo
+```
 
-Control: bind 127.0.0.1. (Si el usuario cambia a 0.0.0.0, se considera “inseguro” y se documenta explícitamente.)
+Logs:
+```bash
+sudo journalctl -u devbox -n 120 --no-pager
+```
 
-11) Plan de trabajo (milestones)
-M0 — Repo + entorno (hecho cuando…)
+---
 
-estructura creada
+## 8) Deploy (lo implementado)
 
-venv + dependencias
+### 8.1 Objetivo del deploy
 
-GET /health funcionando en dev
+- correr tests en DEV
+- construir artefacto (wheel) en DEV
+- copiar artefacto a `/opt/devbox`
+- crear venv limpio en `/opt/devbox/.venv` (prod)
+- instalar **solo runtime deps** + wheel (sin extras dev)
+- actualizar `DEVBOX_GIT_COMMIT` en unit file
+- reiniciar servicio
+- verificar `/info`
+- verificar que **NO** hay dev deps en prod
 
-M1 — Métricas del sistema
+### 8.2 Comando estándar
 
-GET /system entrega cpu/mem/disk/uptime
+```bash
+cd ~/devbox
+make deploy
+```
 
-tests unitarios de collectors
+---
 
-M2 — systemd services
+## 9) Auth de acciones (real)
 
-GET /services con lista desde config
+Header requerido:
+- `X-Devbox-Token: <token>`
 
-manejo de errores (servicio inexistente)
+El token sale de `/etc/devbox/config.yaml` (`auth.token`).
 
-M3 — systemd unit y operación
+Endpoint protegido principal:
+- `POST /actions/restart`
 
-devbox.service instalado
+Ejemplo llamada (sin `yq` real, usando `awk`):
+```bash
+TOKEN="$(sudo awk -F': ' '/token:/{gsub(/"/,"",$2); print $2}' /etc/devbox/config.yaml)"
+curl -i -X POST http://127.0.0.1:8080/actions/restart -H "X-Devbox-Token: $TOKEN"
+```
 
-systemctl enable --now devbox
+Verificar que reinició (PID cambia, uptime se resetea):
+```bash
+sleep 1
+curl -s http://127.0.0.1:8080/info && echo
+sudo systemctl status devbox --no-pager | sed -n '1,14p'
+```
 
-logs en journald correctos
+---
 
-M4 — Seguridad mínima
+## 10) Calidad (tests y estilo)
 
-token requerido para acciones
+Tests solo en DEV:
+```bash
+cd ~/devbox
+make test   # o: pytest -q
+```
 
-restart vía “exit controlado” + systemd restart
+En PROD NO debe existir pytest ni httpx:
+```bash
+sudo /opt/devbox/.venv/bin/python -m pip show pytest || echo "pytest NO"
+sudo /opt/devbox/.venv/bin/python -m pip show httpx  || echo "httpx NO"
+```
 
-M5 — Instalador
+---
 
-scripts/install.sh crea usuario, dirs, venv, config template, unit file, enable/start
+## 11) Próximos pasos sugeridos (sin perder foco)
 
-idempotente (si lo corres dos veces no rompe)
+1) Mantener este `DEVBOX.md` como fuente de verdad (estado + decisiones + comandos).
+2) `install.sh` / `uninstall.sh` idempotentes:
+   - crear usuario/grupo `devbox`
+   - crear `/etc/devbox/config.yaml` (si no existe) con permisos correctos
+   - instalar unit file desde template
+   - `systemctl enable --now devbox`
+3) `/metrics` opcional (Prometheus) + TTL cache (sin complicar el core).
+4) Mejoras de hardening systemd (solo si entiendes tradeoffs):
+   - `ProtectSystem=strict`, `ProtectHome=true` (evaluar impacto)
+   - `ReadWritePaths=` para permitir solo lo necesario
 
-12) Criterios de “terminado”
+---
 
-En localhost:8080/health responde OK
+## APÉNDICE A — Checklist rápido (DEV / PROD / DEPLOY)
 
-journalctl -u devbox -f muestra logs útiles
+DEV:
+```bash
+cd ~/devbox
+source .venv/bin/activate
+export DEVBOX_CONFIG=config/devbox.yaml
+uvicorn devbox.main:app --reload --host 127.0.0.1 --port 8081
+```
 
-Tras POST /actions/restart el servicio vuelve a estar activo en <10s (sin intervención manual)
+PROD:
+```bash
+sudo systemctl status devbox --no-pager | sed -n '1,18p'
+curl -s http://127.0.0.1:8080/health && echo
+curl -s http://127.0.0.1:8080/info && echo
+sudo journalctl -u devbox -n 120 --no-pager
+```
 
-Codebase con estructura limpia y tests mínimos
+DEPLOY:
+```bash
+cd ~/devbox
+make test
+make deploy
+```

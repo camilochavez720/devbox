@@ -5,16 +5,16 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OPT_DIR="/opt/devbox"
 UNIT_FILE="/etc/systemd/system/devbox.service"
 
-echo "[1/6] Running tests..."
+echo "[1/7] Running tests (DEV venv)..."
 cd "$REPO_DIR"
 source .venv/bin/activate
 pytest -q
 
-echo "[2/6] Computing git commit..."
+echo "[2/7] Computing git commit..."
 COMMIT="$(git rev-parse --short=12 HEAD)"
 echo "Commit: $COMMIT"
 
-echo "[3/6] Syncing repo -> $OPT_DIR ..."
+echo "[3/7] Syncing repo -> $OPT_DIR ..."
 sudo mkdir -p "$OPT_DIR"
 sudo rsync -a --delete \
   --exclude '.git' \
@@ -23,12 +23,28 @@ sudo rsync -a --delete \
   --exclude '.pytest_cache' \
   "$REPO_DIR/" "$OPT_DIR/"
 
-echo "[4/6] Creating/refreshing venv + installing editable..."
-sudo python3 -m venv "$OPT_DIR/.venv"
-sudo "$OPT_DIR/.venv/bin/python" -m pip install --upgrade pip
-sudo "$OPT_DIR/.venv/bin/python" -m pip install -e "$OPT_DIR[dev]"
+# MUY IMPORTANTE:
+# evitar que quede un src/devbox.egg-info con permisos raros que rompa installs editable
+sudo rm -rf "$OPT_DIR/src/devbox.egg-info" || true
 
-echo "[5/6] Updating systemd env DEVBOX_GIT_COMMIT..."
+echo "[4/7] Creating/refreshing venv (prod venv) ..."
+sudo rm -rf "$OPT_DIR/.venv"
+sudo python3 -m venv "$OPT_DIR/.venv"
+sudo "$OPT_DIR/.venv/bin/python" -m pip install -U pip
+
+echo "[5/7] Installing ONLY runtime deps + editable package (NO dev extras) ..."
+# 1) Instala runtime deps (las de [project].dependencies)
+sudo "$OPT_DIR/.venv/bin/python" - <<'PY' | sudo "$OPT_DIR/.venv/bin/python" -m pip install -r /dev/stdin
+import tomllib
+from pathlib import Path
+d = tomllib.loads(Path("/opt/devbox/pyproject.toml").read_text(encoding="utf-8"))
+print("\n".join(d["project"]["dependencies"]))
+PY
+
+# 2) Instala tu paquete editable sin dependencias (para no arrastrar extras)
+sudo "$OPT_DIR/.venv/bin/python" -m pip install -e "$OPT_DIR" --no-deps
+
+echo "[6/7] Updating systemd env DEVBOX_GIT_COMMIT..."
 if ! sudo test -f "$UNIT_FILE"; then
   echo "ERROR: unit file not found: $UNIT_FILE" >&2
   exit 1
@@ -47,7 +63,7 @@ fi
 sudo systemctl daemon-reload
 sudo systemctl restart devbox
 
-echo "[6/6] Verifying /info..."
+echo "[7/7] Verifying /info..."
 sleep 1
 INFO_JSON="$(curl -s http://127.0.0.1:8080/info)"
 echo "$INFO_JSON" | python3 -m json.tool >/dev/null

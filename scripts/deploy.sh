@@ -125,7 +125,7 @@ log "[8/8] Verifying readiness + /info + no dev deps in prod..."
 # Espera a que el servicio esté listo (evita carreras post-restart)
 READY=0
 for _ in {1..60}; do
-  if curl -fsS http://127.0.0.1:8080/health >/dev/null; then
+  if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
     READY=1
     break
   fi

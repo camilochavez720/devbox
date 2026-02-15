@@ -138,20 +138,15 @@ if [[ "$READY" -ne 1 ]]; then
   exit 1
 fi
 
-INFO_JSON="$(curl -fsS http://127.0.0.1:8080/info)"
+INFO_JSON="$(curl -fsS --retry 20 --retry-connrefused --retry-delay 0.2 http://127.0.0.1:8080/info)"
 echo "$INFO_JSON" | python3 -m json.tool >/dev/null
 log "$INFO_JSON"
+COMMIT_PROD="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("git_commit",""))' "$INFO_JSON")"
 
-INFO_COMMIT="$(python3 - <<'PY'
-import json,sys
-print(json.loads(sys.stdin.read()).get('git_commit',''))
-PY
-<<<"$INFO_JSON")"
-
-if [[ "$INFO_COMMIT" != "$COMMIT_EXPECTED" ]]; then
+if [[ "$COMMIT_PROD" != "$COMMIT_EXPECTED" ]]; then
   echo "ERROR: PROD corre commit distinto." >&2
   echo "Esperado: $COMMIT_EXPECTED" >&2
-  echo "Corriendo: $INFO_COMMIT" >&2
+  echo "Corriendo: $COMMIT_PROD" >&2
   echo "Respuesta /info: $INFO_JSON" >&2
   sudo journalctl -u "$UNIT_NAME" -n 200 --no-pager >&2 || true
   exit 1

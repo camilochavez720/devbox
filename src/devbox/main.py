@@ -38,7 +38,7 @@ def services():
 
 @app.post("/actions/restart")
 def restart(_: None = Depends(require_token)):
-    schedule_restart(delay_s=0.3)
+    schedule_restart()
     return {"status": "restarting"}
 
 @app.get("/info")
